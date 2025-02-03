@@ -21,6 +21,7 @@ import numpy as np
 import torch
 import tqdm
 import trimesh
+
 from efm3d.aria.aria_constants import (
     ARIA_CALIB,
     ARIA_IMG,
@@ -40,7 +41,6 @@ from efm3d.utils.image import put_text, smart_resize, torch2cv2
 from efm3d.utils.obb_csv_writer import ObbCsvReader
 from efm3d.utils.render import draw_obbs_snippet
 from efm3d.utils.viz import draw_snippet_scene_3d, SceneView
-
 
 VIZ_RGB = "RGB/GT"
 VIZ_SLAM = "SLAM"
@@ -100,15 +100,15 @@ def compose_views(view_dict, keys, vertical=True):
 
 
 def draw_scene_with_mesh_and_obbs(
-    snippet,
-    w,
-    h,
-    scene,
-    snip_obbs=None,
-    tracked_obbs=None,
-    gt_obbs=None,
-    mesh=None,
-    sem_ids_to_names=None,
+        snippet,
+        w,
+        h,
+        scene,
+        snip_obbs=None,
+        tracked_obbs=None,
+        gt_obbs=None,
+        mesh=None,
+        sem_ids_to_names=None,
 ):
     """
     Draw 3d scene view of a snippet, with optionally obbs and mesh.
@@ -142,7 +142,7 @@ def render_views(snippet, h, w, pred_sem_ids_to_names, gt_sem_ids_to_names):
     T_ws = snippet[ARIA_SNIPPET_T_WORLD_SNIPPET]
     Ts_wr = T_ws @ Ts_sr
     rgb_ts = snippet[ARIA_IMG_TIME_NS[0]]
-    time_s = [f"{ts.item()*1e-9:.02f}s" for ts in rgb_ts]
+    time_s = [f"{ts.item() * 1e-9:.02f}s" for ts in rgb_ts]
 
     imgs = {}
     # RGB and SLAM
@@ -226,11 +226,11 @@ def render_views(snippet, h, w, pred_sem_ids_to_names, gt_sem_ids_to_names):
 
 
 def generate_video(
-    streamer,
-    output_dir,
-    fps=10,
-    vol_fusion: Optional[VolumetricFusion] = None,
-    stride_s: float = 0.1,
+        streamer,
+        output_dir,
+        fps=10,
+        vol_fusion: Optional[VolumetricFusion] = None,
+        stride_s: float = 0.1,
 ):
     """
     streamer: the data iterator, assuming input snippets are 1s at 10 FPS.
@@ -317,11 +317,57 @@ def generate_video(
             final_img = np.zeros((H, W, 3), dtype=np.uint8)  # black background
             h, w = input_col[i].shape[:2]
             final_img[:h, :w] = input_col[i]
-            final_img[:sH, gW : gW + sW, :] = scene_img
+            final_img[:sH, gW: gW + sW, :] = scene_img
             if output_col is not None:
                 h, w = output_col[i].shape[:2]
-                final_img[:h, gW + sW : gW + sW + w] = output_col[i]
+                final_img[:h, gW + sW: gW + sW + w] = output_col[i]
 
             out.write(final_img[:, :, ::-1])  # convert rgb to bgr before writing
     out.release()
     return output_path
+
+
+def generate_snips(
+        output_dir,
+        num_snips,
+        vol_fusion: Optional[VolumetricFusion] = None,
+        bin_size: int = 10,
+        center_step: int = 5,
+):
+    """
+    streamer: the data iterator, assuming input snippets are 1s at 10 FPS.
+    output_dir: the output folder for the video, will also load obbs and per_snip artifacts from the same folder
+    fps: the output video fps
+    vol_fusion: A volumetric fusion class instance. If not None, will use it to show the incremental mesh, updated as 1s frame rate.
+    """
+
+    os.makedirs(os.path.join(output_dir, "snipped_mesh"), exist_ok=True)
+    os.makedirs(os.path.join(output_dir, "snipped_occ"), exist_ok=True)
+
+    from tqdm import tqdm
+    centers = [*range(0, num_snips, center_step)]
+
+    np.save(os.path.join(output_dir, "centers.npy"), centers)
+
+    for i, center in enumerate(tqdm(centers)):
+        # if i < 125:
+        #     continue
+        vol_fusion.reinit()
+        start_idx = max(0, center - bin_size // 2)
+        end_idx = min(num_snips, center + bin_size // 2)
+        for i in range(start_idx, end_idx):
+            # raw_idx = center - bin_size // 2 + i
+            # snip_idx = max(0, min(num_snips - 1, raw_idx))
+            vol_fusion.run_step(i)
+        pred_mesh = vol_fusion.get_trimesh()
+        save_mesh = os.path.join(output_dir, f"snipped_mesh/{center:07d}.ply")
+        pred_mesh.export(save_mesh)
+
+        pcd = vol_fusion.get_colored_point_cloud()
+        save_pcd = os.path.join(output_dir, f"snipped_occ/{center:07d}.npy")
+        np.save(save_pcd, pcd)
+
+        # clear memory
+        del pred_mesh
+        del pcd
+        torch.cuda.empty_cache()

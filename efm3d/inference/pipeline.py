@@ -13,21 +13,18 @@
 # limitations under the License.
 
 import json
-import math
 import os
-import shutil
 
 import hydra
+import math
 import numpy as np
 import omegaconf
 import torch
-import trimesh
+
 from efm3d.dataset.vrs_dataset import preprocess_inference, VrsSequenceDataset
 from efm3d.inference.fuse import VolumetricFusion
 from efm3d.inference.model import EfmInference
-from efm3d.inference.viz import generate_video
-from efm3d.utils.gravity import correct_adt_mesh_gravity
-from efm3d.utils.mesh_utils import eval_mesh_to_mesh
+from efm3d.inference.viz import generate_video, generate_snips
 
 
 def get_gt_mesh_ply(data_path):
@@ -89,7 +86,7 @@ def create_streamer(data_path, snippet_length_s, stride_length_s, max_snip):
         # Use the native vrs sequence processor
         streamer = VrsSequenceDataset(
             data_path,
-            frame_rate=10,
+            frame_rate=5,
             sdi=2,
             snippet_length_s=snippet_length_s,
             stride_length_s=stride_length_s,
@@ -132,13 +129,13 @@ def create_output_dir(output_dir, model_ckpt, data_path):
 
 
 def run_one(
-    data_path,
-    model_ckpt,
-    model_cfg,
-    max_snip=9999,
-    snip_stride=0.1,
-    voxel_res=0.04,
-    output_dir="./output",
+        data_path,
+        model_ckpt,
+        model_cfg,
+        max_snip=9999,
+        snip_stride=0.1,
+        voxel_res=0.04,
+        output_dir="./output",
 ):
     output_dir = create_output_dir(output_dir, model_ckpt, data_path)
 
@@ -157,11 +154,16 @@ def run_one(
     model.to(device)
     model.eval()
     print("model init done")
-
+    # 
     # create dataset
     streamer = create_streamer(
         data_path, snippet_length_s=1.0, stride_length_s=snip_stride, max_snip=max_snip
     )
+
+    snippet_time_save_path = os.path.join(output_dir, "snippet_times.json")
+    with open(snippet_time_save_path, "w") as f:
+        json.dump(streamer.snippet_times, f, indent=2, sort_keys=True)
+    print(f"snippet times saved to {os.path.abspath(snippet_time_save_path)}")
 
     # per-snippet inference
     efm_inf = EfmInference(streamer, model, output_dir, device=device, zip=False)
@@ -178,7 +180,7 @@ def run_one(
 
         track_obbs(output_dir)
     except:
-        print(f"Skip tracking obb due to missing dependency, please see INSTALL.md")
+        print("Skip tracking obb due to missing dependency, please see INSTALL.md")
 
     # eval obb
     metrics = {}
@@ -192,7 +194,7 @@ def run_one(
             metrics.update(obb_metrics)
         except:
             print(
-                f"Skip obb evaluation due to missing dependency, please see INSTALL.md"
+                "Skip obb evaluation due to missing dependency, please see INSTALL.md"
             )
 
     # fuse mesh
@@ -203,27 +205,6 @@ def run_one(
     if fused_mesh.vertices.shape[0] > 0 and fused_mesh.faces.shape[0] > 0:
         fused_mesh.export(pred_mesh_ply)
 
-    # eval mesh
-    gt_mesh_ply = get_gt_mesh_ply(data_path)
-    if os.path.exists(pred_mesh_ply) and os.path.exists(gt_mesh_ply):
-        pred_trimesh = trimesh.load(pred_mesh_ply)
-        gt_trimesh = trimesh.load(gt_mesh_ply)
-        if "adt" in gt_mesh_ply:
-            gt_trimesh = correct_adt_mesh_gravity(gt_trimesh)
-
-        mesh_metrics, _, _ = eval_mesh_to_mesh(
-            pred=pred_trimesh,
-            gt=gt_trimesh,
-            sample_num=1000,
-        )
-        metrics.update(mesh_metrics)
-
-    # write metrics
-    if len(metrics) > 0:
-        with open(os.path.join(output_dir, "metrics.json"), "w") as f:
-            json.dump(metrics, f, indent=2, sort_keys=True)
-        print(json.dumps(metrics, indent=2, sort_keys=True))
-
     # viz
     streamer = create_streamer(
         data_path=data_path,
@@ -232,10 +213,15 @@ def run_one(
         max_snip=math.ceil((max_snip - 1) * snip_stride),
     )
     vol_fusion.reinit()
+
+    print('generating snips')
+    generate_snips(
+        output_dir=output_dir, num_snips=681, vol_fusion=vol_fusion, bin_size=20, center_step=5,
+    )
+    print('generating video')
+
     viz_path = generate_video(
         streamer, output_dir=output_dir, vol_fusion=vol_fusion, stride_s=snip_stride
     )
-    print(f"output viz file to {os.path.abspath(viz_path)}")
 
-    # rm per-snippet occupancy tensors
-    shutil.rmtree(os.path.join(output_dir, "per_snip"))
+    print(f"output viz file to {os.path.abspath(viz_path)}")

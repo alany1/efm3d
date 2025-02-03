@@ -20,16 +20,18 @@ from typing import List
 import numpy as np
 import torch
 import tqdm
-
 import trimesh
+from matplotlib import cm
+
 from efm3d.aria.pose import PoseTW
 from efm3d.utils.marching_cubes import marching_cubes_scaled
 from efm3d.utils.reconstruction import pc_to_vox, sample_voxels
 from efm3d.utils.voxel import create_voxel_grid
 
-
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+
 # logger.setLevel(logging.DEBUG)
 
 
@@ -54,16 +56,16 @@ def load_tensor(fname, device):
 
 class VolumeFusion:
     def __init__(
-        self,
-        voxel_size: List[float],
-        voxel_extent: List[float],
-        device: str = "cuda",
-        dtype=torch.float32,
-        w_min: float = 5.0,
-        w_max: float = 100.0,
-        init_value: float = 0.0,
-        surface_thres: float = 0.99,
-        boundary_thres: int = 1,
+            self,
+            voxel_size: List[float],
+            voxel_extent: List[float],
+            device: str = "cuda",
+            dtype=torch.float32,
+            w_min: float = 5.0,
+            w_max: float = 100.0,
+            init_value: float = 0.0,
+            surface_thres: float = 0.99,
+            boundary_thres: int = 1,
     ):
         self.voxel_size = voxel_size  # D x H x W
         self.voxel_extent = voxel_extent  # W x H x D
@@ -111,12 +113,12 @@ class VolumeFusion:
         return mask
 
     def fuse(
-        self,
-        local_volume: torch.Tensor,
-        local_extent: List[float],
-        T_l_w: PoseTW,
-        new_obs_w=1.5,
-        visiblity_mask=None,
+            self,
+            local_volume: torch.Tensor,
+            local_extent: List[float],
+            T_l_w: PoseTW,
+            new_obs_w=1.5,
+            visiblity_mask=None,
     ):
         local_volume = local_volume.to(self.global_volume.device)
         T_l_w = T_l_w.to(self.global_volume.device)
@@ -157,8 +159,8 @@ class VolumeFusion:
         w = self.global_volume_weights[mask]
 
         self.global_volume[mask] = (
-            self.global_volume[mask] * w + local_samples[mask] * 2.0
-        ) / (w + 2.0)
+                                           self.global_volume[mask] * w + local_samples[mask] * 2.0
+                                   ) / (w + 2.0)
 
         # update weights
         self.global_volume_weights[mask] = w + new_obs_w
@@ -176,7 +178,7 @@ class VolumeFusion:
         if reshape:
             return self.global_volume_weights.reshape(self.vD, self.vH, self.vW)
         else:
-            self.global_volume_weights
+            return self.global_volume_weights
 
     def get_mask(self, reshape=True):
         mask = self.global_volume_weights >= self.w_min
@@ -188,6 +190,8 @@ class VolumeFusion:
     def get_trimesh(self, iso_level=0.5):
         global_vol = self.get_volume()
         mask = self.get_mask()
+        mask &= global_vol > 0.1    
+        
         verts_w, faces, _ = marching_cubes_scaled(
             global_vol.cpu().detach().float(),
             iso_level,
@@ -202,12 +206,12 @@ class VolumeFusion:
 
 class VolumetricFusion:
     def __init__(
-        self,
-        input_folder,
-        w_min=5.0,
-        w_max=9999999.0,
-        voxel_res=0.04,
-        device="cuda",
+            self,
+            input_folder,
+            w_min=5.0,
+            w_max=9999999.0,
+            voxel_res=0.04,
+            device="cuda",
     ):
         self.input_folder = input_folder
         self.per_snip_folder = os.path.join(input_folder, "per_snip")
@@ -216,6 +220,7 @@ class VolumetricFusion:
         assert os.path.exists(f_vol_min) and os.path.exists(
             f_vol_max
         ), "missing scene volume info"
+
         self.vol_min = load_tensor(f_vol_min, "cpu").numpy()
         self.vol_max = load_tensor(f_vol_max, "cpu").numpy()
         self.w_min = w_min
@@ -233,7 +238,7 @@ class VolumetricFusion:
         Ts_wv_pt = os.path.join(self.per_snip_folder, "Ts_wv.pt")
         self.Ts_wv = torch.load(Ts_wv_pt, map_location="cpu")  # need to be on cpu
         assert (
-            len(self.f_occ_preds) == self.Ts_wv.shape[0]
+                len(self.f_occ_preds) == self.Ts_wv.shape[0]
         ), f"occ snippets {len(self.f_occ_preds)} should match with Ts_wv {self.Ts_wv.shape[0]}"
 
         # load voxel extent for initialization
@@ -300,8 +305,77 @@ class VolumetricFusion:
             local_extent=self.local_extent,
             T_l_w=T_wv.inverse(),
         )
+        # 
+        # res = self.get_colored_point_cloud()
+        # save_pcd = f"{self.input_folder}/occ_pcd/fused_{i:07d}.npy"
+        # np.save(save_pcd, res)
+        # save_mesh = f"{self.input_folder}/mesh/fused_{i:07d}.ply"
+        # mesh = self.get_trimesh()
+        # mesh.export(save_mesh)
 
     def run(self):
         logger.info("Fusing voxel occupancy using volume fusion...")
         for i, _ in tqdm.tqdm(enumerate(self.f_occ_preds), total=len(self.f_occ_preds)):
             self.run_step(i)
+
+    def get_colored_point_cloud(
+            self,
+            colormap_name: str = "viridis",
+            occupancy_min: float = 0.0,
+            occupancy_max: float = 1.0,
+            include_only_valid: bool = True,
+    ):
+        """
+        Returns a point cloud with RGB colors that map occupancy values to a given colormap.
+
+        Args:
+            colormap_name (str): The name of the matplotlib colormap to use (e.g. "viridis", "plasma", etc.).
+            occupancy_min (float): Minimum occupancy value for color scaling.
+            occupancy_max (float): Maximum occupancy value for color scaling.
+            include_only_valid (bool): If True, only return points where the voxel weight >= w_min.
+
+        Returns:
+            (N, 6) NumPy array, where each row is [x, y, z, r, g, b].
+        """
+        # 1) Get occupancy values (shape: D*H*W)
+        occupancy_flat = self.global_vol.get_volume(reshape=False)  # 1D tensor
+        # 2) Get 3D coordinates of each voxel center (shape: D*H*W, 3)
+        points_flat = self.global_vol.global_volume_points  # 1D (N, 3)
+
+        # 3) If desired, filter out points that don't meet the weight threshold
+        if include_only_valid:
+            # weights_flat = self.global_vol.get_weights(reshape=False)  # 1D tensor
+            weights_flat = self.global_vol.global_volume_weights
+            valid_mask = weights_flat >= self.global_vol.w_min
+            valid_mask &= occupancy_flat >= 0.75
+        else:
+            valid_mask = torch.ones_like(occupancy_flat, dtype=torch.bool)
+
+        # 4) Extract valid occupancies and points
+        occupancy_valid = occupancy_flat[valid_mask]
+        points_valid = points_flat[valid_mask]
+
+        # 5) Normalize occupancy for the colormap
+        #    Clamp occupancy to [occupancy_min, occupancy_max] to avoid out-of-range issues
+        # occupancy_clamped = torch.clamp(occupancy_valid, occupancy_min, occupancy_max)
+        # occupancy_range = occupancy_max - occupancy_min
+        # occupancy_norm = (occupancy_clamped - occupancy_min) / occupancy_range
+        # occupancy_norm = occupancy_norm.cpu().numpy()  # convert to NumPy for colormap
+
+        occupancy_norm = occupancy_valid.cpu().numpy()
+
+        # 6) Get a matplotlib colormap and map the normalized occupancy to RGBA colors
+        cmap = cm.get_cmap(colormap_name)
+        colors_rgba = cmap(occupancy_norm)  # shape: (N, 4)
+
+        # 7) Extract just RGB (drop alpha); if you want alpha, you can keep all 4 channels
+        colors_rgb = colors_rgba[:, :3]  # (N, 3)
+
+        # 8) Combine points and colors into a single array
+        #    [x, y, z, r, g, b]
+        points_np = points_valid.cpu().numpy()  # (N, 3)
+        colored_point_cloud = np.concatenate([points_np, colors_rgb], axis=1)
+        occ_point_cloud = np.concatenate([points_np, occupancy_valid.cpu().numpy()[:, None]], axis=1)
+
+        # return colored_point_cloud
+        return occ_point_cloud
