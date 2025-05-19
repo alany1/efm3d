@@ -138,7 +138,6 @@ def run_one(
         output_dir="./output",
 ):
     output_dir = create_output_dir(output_dir, model_ckpt, data_path)
-
     # create model
     if torch.cuda.is_available():
         device = "cuda"
@@ -174,28 +173,28 @@ def run_one(
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    # track obbs
-    try:
-        from efm3d.inference.track import track_obbs
-
-        track_obbs(output_dir)
-    except:
-        print("Skip tracking obb due to missing dependency, please see INSTALL.md")
-
-    # eval obb
-    metrics = {}
-    pred_csv = os.path.join(output_dir, "tracked_scene_obbs.csv")
-    gt_csv = os.path.join(output_dir, "gt_scene_obbs.csv")
-    if os.path.exists(pred_csv) and os.path.exists(gt_csv):
-        try:
-            from efm3d.inference.eval import evaluate_obb_csv
-
-            obb_metrics = evaluate_obb_csv(pred_csv=pred_csv, gt_csv=gt_csv, iou=0.2)
-            metrics.update(obb_metrics)
-        except:
-            print(
-                "Skip obb evaluation due to missing dependency, please see INSTALL.md"
-            )
+    # # track obbs
+    # try:
+    #     from efm3d.inference.track import track_obbs
+    # 
+    #     track_obbs(output_dir)
+    # except:
+    #     print("Skip tracking obb due to missing dependency, please see INSTALL.md")
+    # 
+    # # eval obb
+    # metrics = {}
+    # pred_csv = os.path.join(output_dir, "tracked_scene_obbs.csv")
+    # gt_csv = os.path.join(output_dir, "gt_scene_obbs.csv")
+    # if os.path.exists(pred_csv) and os.path.exists(gt_csv):
+    #     try:
+    #         from efm3d.inference.eval import evaluate_obb_csv
+    # 
+    #         obb_metrics = evaluate_obb_csv(pred_csv=pred_csv, gt_csv=gt_csv, iou=0.2)
+    #         metrics.update(obb_metrics)
+    #     except:
+    #         print(
+    #             "Skip obb evaluation due to missing dependency, please see INSTALL.md"
+    #         )
 
     # fuse mesh
     vol_fusion = VolumetricFusion(output_dir, voxel_res=voxel_res, device=device)
@@ -204,6 +203,7 @@ def run_one(
     pred_mesh_ply = os.path.join(output_dir, "fused_mesh.ply")
     if fused_mesh.vertices.shape[0] > 0 and fused_mesh.faces.shape[0] > 0:
         fused_mesh.export(pred_mesh_ply)
+    vol_fusion.reinit()
 
     # viz
     streamer = create_streamer(
@@ -212,16 +212,20 @@ def run_one(
         stride_length_s=1.0,
         max_snip=math.ceil((max_snip - 1) * snip_stride),
     )
-    vol_fusion.reinit()
 
-    print('generating snips')
-    generate_snips(
-        output_dir=output_dir, num_snips=681, vol_fusion=vol_fusion, bin_size=20, center_step=5,
-    )
     print('generating video')
-
     viz_path = generate_video(
         streamer, output_dir=output_dir, vol_fusion=vol_fusion, stride_s=snip_stride
     )
+    # print('generating snips')
+    
+    # generate_snips(
+    #     output_dir=output_dir, num_snips=681, vol_fusion=vol_fusion, bin_size=20, center_step=5,
+    # )
+    # print(f"{int(len(streamer)/snip_stride)} num snips")
+    # generate_snips(
+    #         output_dir=output_dir, num_snips=int(len(streamer)/snip_stride), vol_fusion=vol_fusion, bin_size=20, center_step=5,
+    #     )
 
-    print(f"output viz file to {os.path.abspath(viz_path)}")
+
+    # print(f"output viz file to {os.path.abspath(viz_path)}")

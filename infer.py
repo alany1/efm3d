@@ -17,12 +17,11 @@ import argparse
 
 from efm3d.inference.pipeline import run_one
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Run EVL model inference on Aria sequences"
     )
-    parser.add_argument("--input", type=str, required=True, help="input data")
+    parser.add_argument("--input", type=str, default="/home/exx/datasets/aria/real/stata_kitchen_v2/video.vrs", help="input data")
     parser.add_argument(
         "--model_ckpt",
         type=str,
@@ -57,7 +56,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--voxel_res",
         type=float,
-        default=0.04,
+        default=0.07,
         help="voxel resolution in meter for volumetric fusion",
     )
     args = parser.parse_args()

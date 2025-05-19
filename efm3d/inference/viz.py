@@ -225,6 +225,110 @@ def render_views(snippet, h, w, pred_sem_ids_to_names, gt_sem_ids_to_names):
     return imgs
 
 
+def generate_video_keyframed(
+        streamer,
+        output_dir,
+        t0,
+        t1,
+        fps=10,
+        vol_fusion: Optional[VolumetricFusion] = None,
+        stride_s: float = 0.1,
+):
+    """
+    streamer: the data iterator, assuming input snippets are 1s at 10 FPS.
+    output_dir: the output folder for the video, will also load obbs and per_snip artifacts from the same folder
+    fps: the output video fps
+    vol_fusion: A volumetric fusion class instance. If not None, will use it to show the incremental mesh, updated as 1s frame rate.
+    """
+
+    # read snippet obbs
+    snip_obbs_csv = os.path.join(output_dir, "snippet_obbs.csv")
+    snip_obbs = None
+    sem_ids_to_names = None
+    if os.path.exists(snip_obbs_csv):
+        snip_obb_reader = ObbCsvReader(snip_obbs_csv)
+        snip_obbs = snip_obb_reader.obbs
+        sem_ids_to_names = snip_obb_reader.sem_ids_to_names
+
+    # read tracked obbs
+    tracked_obbs_csv = os.path.join(output_dir, "tracked_obbs.csv")
+    tracked_obbs = None
+    if os.path.exists(tracked_obbs_csv):
+        tracked_obb_reader = ObbCsvReader(tracked_obbs_csv)
+        tracked_obbs = tracked_obb_reader.obbs
+
+    # read GT obbs
+    gt_obbs_csv = os.path.join(output_dir, "gt_obbs.csv")
+    gt_obbs = None
+    gt_sem_ids_to_names = None
+    if os.path.exists(gt_obbs_csv):
+        gt_obb_reader = ObbCsvReader(gt_obbs_csv)
+        gt_obbs = gt_obb_reader.obbs
+        gt_sem_ids_to_names = gt_obb_reader.sem_ids_to_names
+
+    # read fused mesh
+    fused_mesh = os.path.join(output_dir, "fused_mesh.ply")
+    pred_mesh = None
+    if os.path.exists(fused_mesh):
+        pred_mesh = trimesh.load(fused_mesh)
+
+    # write video
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    output_path = os.path.join(output_dir, "video.mp4")
+
+    # two columns for 2d views (RGB+SLAM, output), 1 column for 3d scene
+    gW, gH = 360, 360  # 2d grid size
+    sH = 2 * gH
+    sW = sH
+    W = sW + 2 * gW
+    H = sH
+
+    out = cv2.VideoWriter(output_path, fourcc, fps, (W, H))
+    scene = SceneView(width=sW, height=sH)
+    num_snip_per_s = int(1.0 / stride_s)
+    for idx, snippet in tqdm.tqdm(enumerate(streamer), total=len(streamer)):
+        # show incremental fusion if vol_fusion is given
+        if vol_fusion is not None:
+            vol_fusion.reinit()
+            for i in range(num_snip_per_s):
+                vol_fusion.run_step(idx * num_snip_per_s + i)
+            pred_mesh = vol_fusion.get_trimesh()
+
+        scene_imgs = draw_scene_with_mesh_and_obbs(
+            snippet,
+            w=sW,
+            h=sH,
+            scene=scene,
+            snip_obbs=snip_obbs,
+            tracked_obbs=tracked_obbs,
+            gt_obbs=gt_obbs,
+            mesh=pred_mesh,
+            sem_ids_to_names=sem_ids_to_names,
+        )
+        view_imgs = render_views(
+            snippet,
+            gH,
+            gW,
+            pred_sem_ids_to_names=sem_ids_to_names,
+            gt_sem_ids_to_names=gt_sem_ids_to_names,
+        )
+
+        input_col = compose_views(view_imgs, [VIZ_RGB, VIZ_SLAM])
+        output_col = compose_views(view_imgs, [VIZ_PRED_OBB, VIZ_TRACKED_OBB])
+
+        for i, scene_img in enumerate(scene_imgs):
+            final_img = np.zeros((H, W, 3), dtype=np.uint8)  # black background
+            h, w = input_col[i].shape[:2]
+            final_img[:h, :w] = input_col[i]
+            final_img[:sH, gW: gW + sW, :] = scene_img
+            if output_col is not None:
+                h, w = output_col[i].shape[:2]
+                final_img[:h, gW + sW: gW + sW + w] = output_col[i]
+
+            out.write(final_img[:, :, ::-1])  # convert rgb to bgr before writing
+    out.release()
+    return output_path
+
 def generate_video(
         streamer,
         output_dir,
@@ -287,6 +391,7 @@ def generate_video(
     for idx, snippet in tqdm.tqdm(enumerate(streamer), total=len(streamer)):
         # show incremental fusion if vol_fusion is given
         if vol_fusion is not None:
+            vol_fusion.reinit()
             for i in range(num_snip_per_s):
                 vol_fusion.run_step(idx * num_snip_per_s + i)
             pred_mesh = vol_fusion.get_trimesh()
@@ -349,8 +454,9 @@ def generate_snips(
 
     np.save(os.path.join(output_dir, "centers.npy"), centers)
 
+    # for i, center in enumerate(tqdm(centers)):
     for i, center in enumerate(tqdm(centers)):
-        # if i < 125:
+        # if i < 53:
         #     continue
         vol_fusion.reinit()
         start_idx = max(0, center - bin_size // 2)

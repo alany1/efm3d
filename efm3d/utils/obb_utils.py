@@ -27,14 +27,14 @@ from pytorch3d.ops.iou_box3d import (
 )
 from torch import IntTensor, Tensor
 from torch.nn import functional as F
-from torchmetrics.detection.mean_ap import (
+from torchmetrics.detection._mean_ap import (
     _fix_empty_tensors,
     BaseMetricResults,
     MARMetricResults,
     MeanAveragePrecision,
 )
-from torchmetrics.utilities.imports import _TORCHVISION_GREATER_EQUAL_0_8
-
+# from torchmetrics.utilities.imports import _TORCHVISION_GREATER_EQUAL_0_8
+# 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 # logger.setLevel(logging.DEBUG)
@@ -179,11 +179,11 @@ class MeanAveragePrecision3D(MeanAveragePrecision):
             dist_sync_fn=dist_sync_fn,
         )
 
-        if not _TORCHVISION_GREATER_EQUAL_0_8:
-            raise ModuleNotFoundError(
-                "`MeanAveragePrecision` metric requires that `torchvision` version 0.8.0 or newer is installed."
-                " Please install with `pip install torchvision>=0.8` or `pip install torchmetrics[detection]`."
-            )
+        # if not _TORCHVISION_GREATER_EQUAL_0_8:
+        #     raise ModuleNotFoundError(
+        #         "`MeanAveragePrecision` metric requires that `torchvision` version 0.8.0 or newer is installed."
+        #         " Please install with `pip install torchvision>=0.8` or `pip install torchmetrics[detection]`."
+        #     )
         allowed_box_formats = ["xyz8"]
         if box_format not in allowed_box_formats:
             raise ValueError(

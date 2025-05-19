@@ -1094,5 +1094,5 @@ def load_semidense_observations(path: str):
             time_to_uids = pickle.load(f)
             uid_to_times = pickle.load(f)
         print(f"Loaded semidense observations from cached file {cache_path}")
-
+    
     return time_to_uids, uid_to_times
